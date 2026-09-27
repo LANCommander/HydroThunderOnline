@@ -1,0 +1,22 @@
+# Game files: never commit (the port reads them from the user's hydro.chd)
+bin/
+data/
+*.chd
+*.img
+nvram.bin
+cmos*.bin
+eeprom.bin
+
+# Build output
+build/
+out/
+out-linux/
+port/out*/
+dist/
+__pycache__/
+
+# Run-time files
+hydro.log
+hydro_unit*.log
+hydro.ini
+dgVoodoo.conf

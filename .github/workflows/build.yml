@@ -1,0 +1,127 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows (hydro + htmaster)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Release build without debug info (no PDB or CodeView entry). The C++ files are checked against the
+      # C++ Core Guidelines as they compile (HYDRO_CPP_CORE_CHECK: warnings are errors).
+      - name: Configure
+        run: >
+          cmake -S port -B build -A Win32 -DHYDRO_CPP_CORE_CHECK=ON
+          "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=/INCREMENTAL:NO /DEBUG:NONE /OPT:REF /OPT:ICF"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Stage
+        shell: pwsh
+        run: |
+          cmake --install build --config Release --prefix dist
+          Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.md dist
+
+      # hydro.exe must still reserve 0x100000-0x7a3000 for the original image (host code must stay small enough)
+      # and carry no debug directory.
+      - name: Check executables
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pefile
+          python -c @'
+          import sys, pefile
+          bad = 0
+          for f in ("dist/hydro.exe", "dist/htmaster.exe"):
+              pe = pefile.PE(f, fast_load=True)
+              pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DEBUG"]])
+              for d in getattr(pe, "DIRECTORY_ENTRY_DEBUG", []):
+                  if d.struct.Type == pefile.DEBUG_TYPE["IMAGE_DEBUG_TYPE_CODEVIEW"]:
+                      print(f"{f}: has a CodeView debug entry"); bad = 1
+          pe = pefile.PE("dist/hydro.exe", fast_load=True)
+          s = [s for s in pe.sections if s.Name.rstrip(b"\0") == b".hyimg"]
+          if not s:
+              print("hydro.exe: no .hyimg section"); bad = 1
+          else:
+              lo = pe.OPTIONAL_HEADER.ImageBase + s[0].VirtualAddress
+              hi = lo + s[0].Misc_VirtualSize
+              print(f".hyimg {lo:#x}-{hi:#x}")
+              if lo > 0x100000 or hi < 0x7a3000:
+                  print("hydro.exe: .hyimg does not cover 0x100000-0x7a3000 (host code too big?)"); bad = 1
+          sys.exit(bad)
+          '@
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (Get-ChildItem dist -Filter *.pdb) { throw 'PDB files staged' }
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hydro-thunder-windows-x86
+          path: dist/
+          if-no-files-found: error
+
+  linux-master:
+    name: Linux (htmaster)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          cmake -S port -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          mkdir dist
+          cp build/htmaster LICENSE dist/
+          file dist/htmaster
+
+      - name: Smoke test
+        run: |
+          ./dist/htmaster --port 27950 &
+          sleep 1
+          kill -0 $! && kill $!
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: htmaster-linux-x86_64
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux-master]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          (cd artifacts/hydro-thunder-windows-x86 && zip -9 -r "../../HydroThunder-${tag}-windows-x86.zip" .)
+          chmod +x artifacts/htmaster-linux-x86_64/htmaster
+          tar -C artifacts/htmaster-linux-x86_64 -czf "htmaster-${tag}-linux-x86_64.tar.gz" .
+          sha256sum *.zip *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}"
+          --generate-notes *.zip *.tar.gz SHA256SUMS.txt
