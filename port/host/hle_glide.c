@@ -239,6 +239,10 @@ static PFN_grLfbUnlock real_grLfbUnlock;
 
 #define SHADOW_STRIDE 2048
 #define SHADOW_ROWS 480 /* GAME_H plus slack */
+/* The Voodoo2's LFB window is 1024 rows of SHADOW_STRIDE, so any row the game can address is
+ * backed. The lens flare's depth probe reads below the screen when the sun is just off its
+ * bottom edge (row 488 seen leaving Lost Island's tunnel); past SHADOW_ROWS that faulted. */
+#define SHADOW_ALLOC_ROWS 1024
 #define SENTINEL16 0x0001u
 #define SENTINEL32 0x00000001u
 static uint8_t *g_menu_shadow, *g_lfb_shadow;
@@ -280,7 +284,7 @@ static int __cdecl my_grLfbLock(int type, int buffer, int mode, int origin, int 
         return r;
     uint8_t **slot = menu ? &g_menu_shadow : &g_lfb_shadow;
     if (!*slot) {
-        *slot = VirtualAlloc(NULL, SHADOW_STRIDE * SHADOW_ROWS, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        *slot = VirtualAlloc(NULL, SHADOW_STRIDE * SHADOW_ALLOC_ROWS, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
         if (!*slot)
             return r;
         hy_log("glide: %s LFB: stride %u, %dx%d surface; drawing into a %d-stride 512x%d shadow",
@@ -295,18 +299,23 @@ static int __cdecl my_grLfbLock(int type, int buffer, int mode, int origin, int 
     g_lk.buf = buf;
     g_lk.real = *info;
     if (!write) {
-        /* Each game pixel samples the centre of its scaled footprint. */
+        /* Each game pixel samples the centre of its scaled footprint. Off-screen columns and rows
+         * repeat the nearest edge pixel, so probes past the edge see what is at the edge. */
+        int rows = 0;
         for (int y = 0; y < GAME_H; y++) {
             int Y = (y * g_yn + g_yn / 2) / g_yd;
             if (Y >= g_surf_h)
                 break;
             const uint16_t *src = (const uint16_t *)((uint8_t *)info->lfbPtr + (size_t)Y * info->strideInBytes);
             uint16_t *dst = (uint16_t *)(buf + (size_t)y * SHADOW_STRIDE);
-            for (int x = 0; x < GAME_W; x++) {
+            for (int x = 0; x < SHADOW_STRIDE / 2; x++) {
                 int X = (x * g_xn + g_xn / 2) / g_xd;
                 dst[x] = src[X < g_surf_w ? X : g_surf_w - 1];
             }
+            rows = y + 1;
         }
+        for (int y = rows; rows && y < SHADOW_ALLOC_ROWS; y++)
+            memcpy(buf + (size_t)y * SHADOW_STRIDE, buf + (size_t)(rows - 1) * SHADOW_STRIDE, SHADOW_STRIDE);
     } else if (g_lk.sparse) {
         if (g_lk.bpp == 2) {
             uint16_t *p = (uint16_t *)buf;
