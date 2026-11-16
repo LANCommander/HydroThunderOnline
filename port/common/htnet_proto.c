@@ -1,6 +1,7 @@
 #ifdef _WIN32
 #define _CRT_RAND_S
 #include <windows.h>
+#include <intrin.h>
 #else
 #define _POSIX_C_SOURCE 200809L
 #include <time.h>
@@ -175,7 +176,16 @@ int ht_gameopts_decode(const char *s, HtGameOpts *o)
 uint64_t ht_now_ms(void)
 {
 #ifdef _WIN32
-    return GetTickCount64();
+    /* GetTickCount64 is Vista+: extend GetTickCount by counting its wraps (49.7 days apart; callers poll far more
+     * often). The high half of `last` is the wrap count, the low half the last tick seen. */
+    static volatile LONG64 last;
+    for (;;) {
+        LONG64 old = _InterlockedCompareExchange64(&last, 0, 0); /* an atomic 64-bit read on x86 */
+        DWORD now = GetTickCount();
+        LONG64 v = (LONG64)((((uint64_t)old >> 32) + (now < (DWORD)old)) << 32 | now);
+        if (_InterlockedCompareExchange64(&last, v, old) == old)
+            return (uint64_t)v;
+    }
 #else
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);

@@ -27,7 +27,8 @@ enum {
 
 #define BIND_SLOTS 2
 
-/* Gamepad (XInput) buttons: the XINPUT_GAMEPAD_* bit index, plus the two triggers. */
+/* Gamepad buttons, in XInput terms (input.c maps SDL controllers onto them): the XINPUT_GAMEPAD_* bit index, plus
+ * the two triggers. */
 enum {
     PAD_NONE = -1,
     PAD_DPAD_UP = 0,

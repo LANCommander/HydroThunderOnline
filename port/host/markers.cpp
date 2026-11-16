@@ -2,7 +2,6 @@
 #define NOMINMAX
 #include <windows.h>
 #include <wincodec.h>
-#include <wrl/client.h>
 
 extern "C" {
 #include "host.h"
@@ -29,7 +28,6 @@ extern "C" {
 
 namespace {
 
-using Microsoft::WRL::ComPtr;
 using Bytes = std::vector<std::uint8_t>;
 using ByteView = std::span<const std::uint8_t>;
 
@@ -378,18 +376,18 @@ std::optional<Bytes> load_resource(int id)
 // Decodes a PNG of exactly the given size to 32-bit BGRA, top row first.
 std::optional<Bytes> decode_bgra(IWICImagingFactory &wic, Bytes png, TextureSize size)
 {
-    ComPtr<IWICStream> stream;
-    if (hy::failed(wic.CreateStream(&stream)))
+    hy::com_ptr<IWICStream> stream;
+    if (hy::failed(wic.CreateStream(stream.put())))
         return std::nullopt;
     if (hy::failed(stream->InitializeFromMemory(png.data(), hy::narrow<DWORD>(png.size()))))
         return std::nullopt;
 
-    ComPtr<IWICBitmapDecoder> decoder;
-    if (hy::failed(wic.CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder)))
+    hy::com_ptr<IWICBitmapDecoder> decoder;
+    if (hy::failed(wic.CreateDecoderFromStream(stream.get(), nullptr, WICDecodeMetadataCacheOnDemand, decoder.put())))
         return std::nullopt;
 
-    ComPtr<IWICBitmapFrameDecode> frame;
-    if (hy::failed(decoder->GetFrame(0, &frame)))
+    hy::com_ptr<IWICBitmapFrameDecode> frame;
+    if (hy::failed(decoder->GetFrame(0, frame.put())))
         return std::nullopt;
 
     UINT w = 0;
@@ -397,10 +395,10 @@ std::optional<Bytes> decode_bgra(IWICImagingFactory &wic, Bytes png, TextureSize
     if (hy::failed(frame->GetSize(&w, &h)) || w != size.width || h != size.height)
         return std::nullopt;
 
-    ComPtr<IWICFormatConverter> converter;
-    if (hy::failed(wic.CreateFormatConverter(&converter)))
+    hy::com_ptr<IWICFormatConverter> converter;
+    if (hy::failed(wic.CreateFormatConverter(converter.put())))
         return std::nullopt;
-    if (hy::failed(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr,
+    if (hy::failed(converter->Initialize(frame.get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr,
                                          0.0, WICBitmapPaletteTypeCustom)))
         return std::nullopt;
 
@@ -506,10 +504,11 @@ std::optional<Bytes> build_overlay(const std::string &ht_r2_path)
     }
 
     const ComScope com;
-    ComPtr<IWICImagingFactory> wic;
+    hy::com_ptr<IWICImagingFactory> wic;
     const bool have_wic =
         com.usable() &&
-        hy::succeeded(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic)));
+        hy::succeeded(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                       __uuidof(IWICImagingFactory), wic.put_void()));
     if (!have_wic) {
         hy_log("markers: WIC is unavailable; no markers 9-16");
         return std::nullopt;
@@ -523,7 +522,7 @@ std::optional<Bytes> build_overlay(const std::string &ht_r2_path)
             continue; // HT.R2 has it already
 
         auto png = load_resource(MARKERS_RESOURCE_BASE + n);
-        const auto bgra = png ? decode_bgra(*wic.Get(), std::move(*png), *size) : std::nullopt;
+        const auto bgra = png ? decode_bgra(*wic.get(), std::move(*png), *size) : std::nullopt;
         if (!bgra) {
             hy_log("markers: marker%02d.png is missing or not %ux%u", n, size->width, size->height);
             continue;

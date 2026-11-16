@@ -1,6 +1,6 @@
 # Hydro Thunder Online (Unofficial Windows Port)
 
-An unofficial Windows port of Midway's 1999 arcade game **Hydro Thunder**. This project is an executable that provides a wrapper around the original arcade game code. Calls to the original embedded operating system and Glide APIs are replaced with win32, XInput, and dgVoodoo2 API calls. Parts of the game have been decompiled and rewritten in C, which enables the ability to play this arcade classic online or on a local network with up to 16 simultaneous racers.
+An unofficial Windows port of Midway's 1999 arcade game **Hydro Thunder**. This project is an executable that provides a wrapper around the original arcade game code. Calls to the original embedded operating system and Glide APIs are replaced with win32, SDL, and dgVoodoo2 API calls. Parts of the game have been decompiled and rewritten in C, which enables the ability to play this arcade classic online or on a local network with up to 16 simultaneous racers.
 
 No game files are included. You need the arcade's hard disk image, `hydro.chd`, as used by MAME.
 
@@ -8,7 +8,7 @@ No game files are included. You need the arcade's hard disk image, `hydro.chd`, 
 
 - The arcade game, including the operator menu (audits, adjustments, tests), with FREE PLAY on by default.
 - Windowed or full screen rendering with selectable resolutions provided by dgVoodoo2
-- Keyboard and XInput gamepads, with rebindable controls.
+- Keyboard and gamepads (Xbox, PlayStation, Switch and other controllers, through SDL), with rebindable controls.
 - Reworked operator menu to provide an authentic-feeling settings menu
 - Host or join a network lobby either on your local network or over the internet via HTO's master server. Race with up to 16 players in a single lobby!
 
@@ -48,6 +48,10 @@ Settings, high scores and audits are kept in `Saved Games\Midway\Hydro Thunder` 
 In the operator menu, Up/Down move, Enter selects and Esc or Backspace goes back. All of these can be rebound under
 PC SETTINGS.
 
+Gamepad buttons are named as on an Xbox controller; other controllers use the button in the same place. The first
+controller SDL recognizes is used. For one it doesn't know, put a [`gamecontrollerdb.txt`](https://github.com/mdqinc/SDL_GameControllerDB)
+next to `hydro.exe` (or set `SDL_GAMECONTROLLERCONFIG`).
+
 ### Linked play
 
 Open **NETWORK LOBBY** in the operator menu, then:
@@ -79,7 +83,10 @@ cmake --build build --config Release
 cmake --install build --config Release --prefix dist
 ```
 
-The host must be 32-bit (`-A Win32`) because it runs the original x86 code in-process. The build downloads the dgVoodoo 2.87.5 DLLs (checked against pinned SHA-256 hashes) and copies them next to `hydro.exe`; `-DHYDRO_FETCH_DGVOODOO=OFF` skips that. `-DHYDRO_CPP_CORE_CHECK=ON` checks the C++ sources against the [C++ Core Guidelines](https://github.com/isocpp/CppCoreGuidelines) with MSVC's checker.
+The host must be 32-bit (`-A Win32`) because it runs the original x86 code in-process. Everything is linked
+statically, the C runtime included, and built for Windows XP: the SDK headers hide newer APIs, and
+`port/common/winxp_crt.c` stands in for the few Vista+ functions the C runtime itself imports.
+`port/tools/check_imports.py` (run by CI) checks that the executables import nothing XP lacks. The build downloads the dgVoodoo 2.87.5 DLLs (checked against pinned SHA-256 hashes) and copies them next to `hydro.exe`; `-DHYDRO_FETCH_DGVOODOO=OFF` skips that. `-DHYDRO_CPP_CORE_CHECK=ON` checks the C++ sources against the [C++ Core Guidelines](https://github.com/isocpp/CppCoreGuidelines) with MSVC's checker.
 
 On Linux, the same CMake project builds `htmaster` only.
 
@@ -101,7 +108,7 @@ Environment variables for development: `HYDRO_TRACE=func1,func2` logs calls to o
 | `port/generated`, `port/include` | symbol tables generated from the arcade executable's debug symbols |
 | `assets` | the application icon and the port's own player markers 9-16 (PNGs, and their source `markers.psd`) |
 | `docs` | the network protocol and the port's changes to it |
-| `vendor` | submodules: libchdr and the dgVoodoo 2 API |
+| `vendor` | submodules: libchdr, SDL 2 and the dgVoodoo 2 API |
 
 ## License
 

@@ -1,5 +1,5 @@
 /*
- * Keyboard / XInput pad -> cabinet inputs, as the DiegoIO board reports them.
+ * Keyboard / gamepad (SDL, else XInput) -> cabinet inputs, as the DiegoIO board reports them.
  *
  * controldriver (CONTROL_DRIVER.OBJ) reads:
  *   analog 0 = ADC 1 (reply byte 3): steering, 0..255, centre 0x80, dead zone +-7.5%
@@ -13,6 +13,10 @@
  * 1/2/3 views, 5 coin, F1 service credit, F2 Test, -/= volume; pad d-pad, A/Start, B/X/Y, Back.
  * The pad's stick steers and its triggers (or a stick) drive the throttle. Esc closes the window,
  * except in the operator menu (which has a QUIT item).
+ *
+ * The pad is the first SDL game controller (Xbox, PlayStation, Switch and anything else SDL has a mapping for;
+ * gamecontrollerdb.txt next to hydro.exe or SDL_GAMECONTROLLERCONFIG adds more), read into an XINPUT_GAMEPAD so
+ * bindings keep the XInput button numbering. If SDL can't start, XInput pad 0 is read directly.
  *
  * The operator menu (vinput in the image) navigates with the cabinet's buttons: vol-/vol+ move
  * the cursor, Test or boost selects, service credit goes back. While it runs, Up/Down (keys or
@@ -36,6 +40,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <xinput.h>
+
+#define SDL_MAIN_HANDLED
+#include <SDL.h>
 
 static uint8_t g_coin[5];
 static int g_coin_down;
@@ -74,16 +81,31 @@ static int key(int vk)
     return vk && focused() && (GetAsyncKeyState(vk) & 0x8000);
 }
 
-/* ---------------------------------------------------------------- XInput (loaded at runtime) */
+/* Runs fn once, whichever thread gets here first (InitOnceExecuteOnce is Vista+). */
+static void run_once(volatile LONG *state, void (*fn)(void))
+{
+    if (*state == 2)
+        return;
+    if (InterlockedCompareExchange(state, 1, 0) == 0) {
+        fn();
+        InterlockedExchange(state, 2);
+        return;
+    }
+    while (*state != 2)
+        Sleep(0);
+}
+
+/* ---------------------------------------------------------------- gamepad: SDL, else XInput (loaded at runtime) */
 
 typedef DWORD(WINAPI *PFN_XInputGetState)(DWORD, XINPUT_STATE *);
 static PFN_XInputGetState g_xinput_get;
-static INIT_ONCE g_xinput_once = INIT_ONCE_STATIC_INIT;
-static volatile LONG g_pad_retry; /* GetTickCount of the next probe while no pad is connected */
+static int g_sdl; /* SDL's game controller subsystem is up */
+static SDL_GameController *g_sdl_pad;
+static volatile LONG g_pad_once;
+static volatile LONG g_pad_retry; /* GetTickCount of the next probe while no XInput pad is connected */
 
-static BOOL CALLBACK xinput_load(INIT_ONCE *once, void *param, void **ctx)
+static void xinput_load(void)
 {
-    (void)once, (void)param, (void)ctx;
     static const char *const dlls[] = {"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"};
     for (int i = 0; i < 3 && !g_xinput_get; i++) {
         HMODULE m = LoadLibraryA(dlls[i]);
@@ -94,17 +116,93 @@ static BOOL CALLBACK xinput_load(INIT_ONCE *once, void *param, void **ctx)
     }
     if (!g_xinput_get)
         hy_log("input: XInput not available, keyboard only");
-    return TRUE;
 }
 
-/* Pad 0 if enabled, connected and the window has focus. Probing a missing pad is slow, so retry once a second. */
+static void pad_load(void)
+{
+    /* Focus is checked here (focused()): SDL has no window to track it by. SDL's own thread watches for pads. */
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_THREAD, "1");
+    if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0) {
+        hy_log("input: SDL unavailable (%s), trying XInput", SDL_GetError());
+        xinput_load();
+        return;
+    }
+    g_sdl = 1;
+    SDL_JoystickEventState(SDL_IGNORE); /* polled: don't queue events nobody reads */
+    SDL_GameControllerEventState(SDL_IGNORE);
+    SDL_version v;
+    SDL_GetVersion(&v);
+    hy_log("input: SDL %d.%d.%d game controllers", v.major, v.minor, v.patch);
+    char db[MAX_PATH]; /* next to hydro.exe */
+    DWORD len = GetModuleFileNameA(NULL, db, sizeof db);
+    char *slash = len < sizeof db ? strrchr(db, '\\') : NULL;
+    if (slash && snprintf(slash + 1, sizeof db - (size_t)(slash + 1 - db), "gamecontrollerdb.txt") > 0 &&
+        GetFileAttributesA(db) != INVALID_FILE_ATTRIBUTES) {
+        int n = SDL_GameControllerAddMappingsFromFile(db);
+        if (n < 0)
+            hy_log("input: %s: %s", db, SDL_GetError());
+        else
+            hy_log("input: %s: %d mappings", db, n);
+    }
+}
+
+/* SDL's buttons as XINPUT_GAMEPAD wButtons bits (the PAD_* numbering). */
+static const struct {
+    int pad;
+    SDL_GameControllerButton sdl;
+} k_sdl_buttons[] = {
+    {PAD_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_UP},     {PAD_DPAD_DOWN, SDL_CONTROLLER_BUTTON_DPAD_DOWN},
+    {PAD_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_LEFT}, {PAD_DPAD_RIGHT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT},
+    {PAD_START, SDL_CONTROLLER_BUTTON_START},         {PAD_BACK, SDL_CONTROLLER_BUTTON_BACK},
+    {PAD_LS, SDL_CONTROLLER_BUTTON_LEFTSTICK},        {PAD_RS, SDL_CONTROLLER_BUTTON_RIGHTSTICK},
+    {PAD_LB, SDL_CONTROLLER_BUTTON_LEFTSHOULDER},     {PAD_RB, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER},
+    {PAD_A, SDL_CONTROLLER_BUTTON_A},                 {PAD_B, SDL_CONTROLLER_BUTTON_B},
+    {PAD_X, SDL_CONTROLLER_BUTTON_X},                 {PAD_Y, SDL_CONTROLLER_BUTTON_Y},
+};
+
+/* The first game controller SDL has, as an XInput pad (SDL's Y axes point down, XInput's up). */
+static int sdl_pad_read(XINPUT_GAMEPAD *out)
+{
+    SDL_GameControllerUpdate();
+    if (g_sdl_pad && !SDL_GameControllerGetAttached(g_sdl_pad)) {
+        hy_log("input: gamepad disconnected");
+        SDL_GameControllerClose(g_sdl_pad);
+        g_sdl_pad = NULL;
+    }
+    for (int i = 0; !g_sdl_pad && i < SDL_NumJoysticks(); i++) {
+        if (SDL_IsGameController(i) && (g_sdl_pad = SDL_GameControllerOpen(i)) != NULL)
+            hy_log("input: gamepad connected: %s", SDL_GameControllerName(g_sdl_pad));
+    }
+    if (!g_sdl_pad)
+        return 0;
+    SDL_GameController *c = g_sdl_pad;
+    memset(out, 0, sizeof *out);
+    for (size_t i = 0; i < sizeof k_sdl_buttons / sizeof k_sdl_buttons[0]; i++)
+        if (SDL_GameControllerGetButton(c, k_sdl_buttons[i].sdl))
+            out->wButtons |= (WORD)(1u << k_sdl_buttons[i].pad);
+    out->bLeftTrigger = (BYTE)(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) * 255 / 32767);
+    out->bRightTrigger = (BYTE)(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) * 255 / 32767);
+    out->sThumbLX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX);
+    out->sThumbLY = (SHORT)(-1 - SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY));
+    out->sThumbRX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX);
+    out->sThumbRY = (SHORT)(-1 - SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY));
+    return 1;
+}
+
+/* The pad if enabled, connected and the window has focus. Probing a missing XInput pad is slow, so that's retried
+ * once a second. */
 static int pad_read(XINPUT_GAMEPAD *out)
 {
     static int connected = -1;
     if (!g_settings.ctl.gamepad)
         return 0;
-    InitOnceExecuteOnce(&g_xinput_once, xinput_load, NULL, NULL);
-    if (!g_xinput_get || !focused())
+    run_once(&g_pad_once, pad_load);
+    if (!focused())
+        return 0;
+    if (g_sdl)
+        return sdl_pad_read(out);
+    if (!g_xinput_get)
         return 0;
     DWORD now = GetTickCount();
     if (connected == 0 && (LONG)(now - (DWORD)g_pad_retry) < 0)
@@ -155,7 +253,7 @@ static struct {
     DWORD from, to; /* ms since launch */
 } g_script[64];
 static int g_script_n;
-static INIT_ONCE g_script_once = INIT_ONCE_STATIC_INIT;
+static volatile LONG g_script_once;
 
 static DWORD ms_since_launch(void)
 {
@@ -167,12 +265,11 @@ static DWORD ms_since_launch(void)
     return (DWORD)((b.QuadPart - a.QuadPart) / 10000);
 }
 
-static BOOL CALLBACK script_parse(INIT_ONCE *once, void *param, void **ctx)
+static void script_parse(void)
 {
-    (void)once, (void)param, (void)ctx;
     const char *env = getenv("HYDRO_INPUT_SCRIPT");
     if (!env)
-        return TRUE;
+        return;
     char buf[1024];
     snprintf(buf, sizeof buf, "%s", env);
     char *save, *tok = strtok_s(buf, ",", &save);
@@ -196,12 +293,11 @@ static BOOL CALLBACK script_parse(INIT_ONCE *once, void *param, void **ctx)
         g_script[g_script_n++].to = (DWORD)(to * 1000);
     }
     hy_log("input: %d scripted inputs", g_script_n);
-    return TRUE;
 }
 
 static int script_held(int act)
 {
-    InitOnceExecuteOnce(&g_script_once, script_parse, NULL, NULL);
+    run_once(&g_script_once, script_parse);
     if (!g_script_n)
         return 0;
     DWORD t = ms_since_launch();

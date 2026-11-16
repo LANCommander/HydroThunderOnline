@@ -4,3 +4,6 @@
 [submodule "vendor/dgVoodoo2"]
 	path = vendor/dgVoodoo2
 	url = https://github.com/dege-diosg/dgVoodoo2.git
+[submodule "vendor/SDL"]
+	path = vendor/SDL
+	url = https://github.com/libsdl-org/SDL.git

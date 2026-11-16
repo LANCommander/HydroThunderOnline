@@ -13,6 +13,12 @@ CHD reader used to extract the game files from `hydro.chd` on first run. Statica
 
 The full license texts are in the submodule.
 
+## SDL 2 (source, `vendor/SDL` submodule)
+
+Game controller input. Statically linked into `hydro.exe`. <https://libsdl.org>, zlib license, Copyright (C) 1997-2025
+Sam Lantinga. Its bundled HIDAPI (`src/hidapi`) is used under HIDAPI's BSD-style license. The full license texts are in
+the submodule.
+
 ## dgVoodoo 2 (headers from the `vendor/dgVoodoo2` submodule; DLLs downloaded at build time)
 
 Glide wrapper and configuration API by Dege. <https://github.com/dege-diosg/dgVoodoo2>, <https://dege.fw.hu>.

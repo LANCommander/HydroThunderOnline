@@ -9,11 +9,32 @@ set(REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 add_compile_definitions(HYDRO_VERSION="${PROJECT_VERSION}" HYDRO_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
     HYDRO_VERSION_MINOR=${PROJECT_VERSION_MINOR} HYDRO_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 
+if(WIN32)
+    # The C/C++ runtime is linked statically into every target, the vendored libraries' too (they're added with
+    # policy CMP0091 at its new default, so they follow CMAKE_MSVC_RUNTIME_LIBRARY): no VC++ redistributable.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+    enable_language(ASM_MASM)
+
+    # Windows XP SP3 is the oldest supported Windows, for both executables:
+    # - _WIN32_WINNT / WINVER hide every newer API in the SDK headers, so calling one is a compile error;
+    # - the PE headers ask for Windows 5.01 (the linker's default, 6.0, doesn't load on XP);
+    # - common/winxp_crt.* stand in for the few Vista+ functions the static CRT itself imports;
+    # - tools/check_imports.py checks the linked executables (CI).
+    add_subdirectory(common)
+    function(hydro_target_winxp target)
+        target_compile_definitions(${target} PRIVATE _WIN32_WINNT=0x0501 WINVER=0x0501)
+        target_link_libraries(${target} PRIVATE winxp_crt)
+        target_link_options(${target} PRIVATE /SUBSYSTEM:CONSOLE,5.01)
+    endfunction()
+endif()
+
 # Lobby master / relay server: portable C with no dependencies, so it builds on Windows and Linux.
 add_executable(htmaster server/htmaster.c server/lobby.c common/htnet_proto.c common/sha256.c)
 if(WIN32)
     target_compile_definitions(htmaster PRIVATE _CRT_SECURE_NO_WARNINGS WIN32_LEAN_AND_MEAN)
     target_link_libraries(htmaster PRIVATE ws2_32)
+    hydro_target_winxp(htmaster)
 else()
     target_compile_definitions(htmaster PRIVATE _POSIX_C_SOURCE=200809L)
     target_compile_options(htmaster PRIVATE -Wall -Wextra)
@@ -33,8 +54,6 @@ endif()
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
     message(FATAL_ERROR "The host runs original 32-bit x86 code in-process: configure with -A Win32")
 endif()
-
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_executable(hydro
     host/main.c
@@ -73,8 +92,9 @@ set_source_files_properties(${GAME_SOURCES} PROPERTIES COMPILE_OPTIONS "/arch:IA
 target_include_directories(hydro PRIVATE host include game ${REPO_ROOT}/vendor/dgVoodoo2/dgVoodooAPI/Inc)
 target_compile_definitions(hydro PRIVATE _CRT_SECURE_NO_WARNINGS WIN32_LEAN_AND_MEAN)
 target_compile_options(hydro PRIVATE /W3 /wd4201 $<$<COMPILE_LANGUAGE:CXX>:/permissive- /EHsc>)
-target_link_libraries(hydro PRIVATE chdr-static user32 gdi32 comdlg32 winmm ws2_32 iphlpapi dnsapi shell32 ole32
-    windowscodecs)
+target_link_libraries(hydro PRIVATE chdr-static SDL2::SDL2-static user32 gdi32 comdlg32 winmm ws2_32 iphlpapi dnsapi
+    shell32 ole32 windowscodecs)
+hydro_target_winxp(hydro)
 
 # The host's C++ follows the C++ Core Guidelines; this runs MSVC's checker for them with warnings as errors.
 # (The rest of the port is C11, and the game modules mirror the original's code.)
@@ -95,6 +115,21 @@ set(CHDR_WANT_TESTS OFF CACHE BOOL "" FORCE)
 set(INSTALL_STATIC_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF)
 add_subdirectory(${REPO_ROOT}/vendor/libchdr ${CMAKE_CURRENT_BINARY_DIR}/libchdr EXCLUDE_FROM_ALL)
+
+# SDL 2 for game controllers (host/input.c), built as a static library with only what that needs. SDL 2 (not 3)
+# because it still runs on Windows XP. Its code sits below the original image, so unused parts are left out.
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST OFF CACHE BOOL "" FORCE)
+set(SDL_LIBC ON CACHE BOOL "" FORCE) # the static CRT, not SDL's own (which clashes with it)
+foreach(sub AUDIO VIDEO RENDER HAPTIC POWER FILESYSTEM SENSOR LOCALE MISC)
+    set(SDL_${sub} OFF CACHE BOOL "" FORCE)
+endforeach()
+add_subdirectory(${REPO_ROOT}/vendor/SDL ${CMAKE_CURRENT_BINARY_DIR}/SDL EXCLUDE_FROM_ALL)
+# No dynamic API: its jump table references (so links in) every SDL function, and it would let an environment
+# variable swap in another SDL DLL. SDL_dynapi.h rejects SDL_DYNAMIC_API=0 from the command line; this is the one
+# switch it takes. (With MSVC its only other effect is that two of SDL's internal joystick locks aren't static.)
+target_compile_definitions(SDL2-static PRIVATE SDL_THREAD_SAFETY_ANALYSIS)
 
 # The original image must live at 0x00100000-0x007a30c0 (it has no relocations). The kernel
 # fills low memory (stack, heaps) before main() runs, so hydro.exe itself owns that range:

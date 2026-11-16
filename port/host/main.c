@@ -75,8 +75,13 @@ static void set_path(char *dst, const char *src, int absolute)
 static void default_save_dir(char *dst)
 {
     char base[MAX_PATH] = "";
+    /* Saved Games is a Vista+ known folder (SHGetKnownFolderPath too): XP gets the fallback below. */
+    typedef HRESULT(WINAPI * PFN_SHGetKnownFolderPath)(REFGUID, DWORD, HANDLE, PWSTR *);
+    static const GUID saved_games = {0x4c5c32ff, 0xbb9d, 0x43b0, {0xb5, 0xb4, 0x2d, 0x72, 0xe5, 0x4e, 0xaa, 0xa4}};
+    PFN_SHGetKnownFolderPath get =
+        (PFN_SHGetKnownFolderPath)GetProcAddress(GetModuleHandleA("shell32.dll"), "SHGetKnownFolderPath");
     PWSTR w;
-    if (SUCCEEDED(SHGetKnownFolderPath(&FOLDERID_SavedGames, KF_FLAG_CREATE, NULL, &w))) {
+    if (get && SUCCEEDED(get(&saved_games, 0x8000 /* KF_FLAG_CREATE */, NULL, &w))) {
         WideCharToMultiByte(CP_ACP, 0, w, -1, base, sizeof base, NULL, NULL);
         CoTaskMemFree(w);
     }

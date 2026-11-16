@@ -129,7 +129,7 @@ static void menu_assist(void)
     int ctx = context();
     int cur = ctx ? current(ctx) : 0;
     int count = ctx == CTX_INITIALS ? (int)MEM(uint32_t, HISCORE_COUNT) : 0;
-    ULONGLONG now = GetTickCount64();
+    ULONGLONG now = ht_now_ms();
     if (ctx != g_ctx || count != g_count) {
         g_ctx = ctx;
         g_count = count;

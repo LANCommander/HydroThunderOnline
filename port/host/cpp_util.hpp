@@ -34,4 +34,36 @@ constexpr bool succeeded(long hr) noexcept
     return hr >= 0;
 }
 
+/* An owning COM interface pointer, like WRL's ComPtr (WRL needs the Vista SDK target; the host targets XP).
+ * put() hands out the address for an out parameter, releasing what was held. */
+template <typename T>
+class com_ptr {
+public:
+    com_ptr() noexcept = default;
+    com_ptr(const com_ptr &) = delete;
+    com_ptr(com_ptr &&) = delete;
+    com_ptr &operator=(const com_ptr &) = delete;
+    com_ptr &operator=(com_ptr &&) = delete;
+    ~com_ptr() { reset(); }
+
+    T *get() const noexcept { return ptr_; }
+    T *operator->() const noexcept { return ptr_; }
+    T **put() noexcept
+    {
+        reset();
+        return &ptr_;
+    }
+    [[gsl::suppress("type.1")]] void **put_void() noexcept { return reinterpret_cast<void **>(put()); }
+    /* IUnknown::Release isn't declared noexcept, but COM methods don't throw. */
+    [[gsl::suppress("f.6")]] void reset() noexcept
+    {
+        if (ptr_)
+            ptr_->Release();
+        ptr_ = nullptr;
+    }
+
+private:
+    T *ptr_ = nullptr;
+};
+
 } // namespace hy

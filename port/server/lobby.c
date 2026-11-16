@@ -103,7 +103,7 @@ static const char *addr_str(const struct sockaddr_in *a)
     static int n;
     char *b = buf[n++ & 3];
     char ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, (void *)&a->sin_addr, ip, sizeof ip);
+    ht_ip4_str(a->sin_addr, ip, sizeof ip);
     snprintf(b, 32, "%s:%u", ip, ntohs(a->sin_port));
     return b;
 }

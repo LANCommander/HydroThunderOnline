@@ -36,11 +36,13 @@ jobs:
           Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.md dist
 
       # hydro.exe must still reserve 0x100000-0x7a3000 for the original image (host code must stay small enough)
-      # and carry no debug directory.
+      # and carry no debug directory. Both executables must load on Windows XP and need no runtime DLLs.
       - name: Check executables
         shell: pwsh
         run: |
           python -m pip install --quiet pefile
+          python port/tools/check_imports.py dist/hydro.exe dist/htmaster.exe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           python -c @'
           import sys, pefile
           bad = 0

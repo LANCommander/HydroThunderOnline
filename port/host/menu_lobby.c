@@ -842,7 +842,7 @@ static int __cdecl cmd_refresh(int one, MenuItem *it)
 {
     (void)one, (void)it;
     lobby_browse(1);
-    g_browse_next = GetTickCount64() + 3000;
+    g_browse_next = ht_now_ms() + 3000;
     mess_queue_message(MSG_PAINT, 0);
     return 0;
 }
@@ -887,7 +887,7 @@ static int __cdecl browse_menu(int msg, int p)
             lobby_browse(1);
             g_browse.cur = 0;
         }
-        g_browse_next = GetTickCount64() + 3000;
+        g_browse_next = ht_now_ms() + 3000;
         Fields_col = 22;
         browse_build();
     } else if (msg == MSG_PAINT) {
@@ -901,9 +901,9 @@ static int __cdecl browse_menu(int msg, int p)
         char sig[sizeof g_browse_sig];
         if (room_check())
             return 0;
-        if (GetTickCount64() >= g_browse_next) {
+        if (ht_now_ms() >= g_browse_next) {
             lobby_browse(0); /* ask again; answers update the list in place */
-            g_browse_next = GetTickCount64() + 3000;
+            g_browse_next = ht_now_ms() + 3000;
         }
         browse_signature(sig, sizeof sig);
         if (strcmp(sig, g_browse_sig) || status_changed())

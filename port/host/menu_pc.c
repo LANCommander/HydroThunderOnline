@@ -299,7 +299,7 @@ static int __cdecl capture_screen(int msg, int p)
         g_cap.parent = (MessHandler)p;
         g_cap.step = 0;
         g_cap.changed = 0;
-        g_cap.t0 = GetTickCount64();
+        g_cap.t0 = ht_now_ms();
         input_set_capture(1);
         break;
     case MSG_PAINT:
@@ -338,7 +338,7 @@ static int __cdecl capture_screen(int msg, int p)
                 got = k;
             if (g_cap.pad) {
                 got = input_capture_pad();
-                if (GetTickCount64() - g_cap.t0 > CAP_TIMEOUT_MS)
+                if (ht_now_ms() - g_cap.t0 > CAP_TIMEOUT_MS)
                     esc = 1;
             }
         }
@@ -349,7 +349,7 @@ static int __cdecl capture_screen(int msg, int p)
             } else {
                 g_cap.got[0] = got;
                 g_cap.step = 1;
-                g_cap.t0 = GetTickCount64();
+                g_cap.t0 = ht_now_ms();
             }
             mess_queue_message(MSG_PAINT, 0);
         } else if (g_cap.step == 1 && (esc || have)) {

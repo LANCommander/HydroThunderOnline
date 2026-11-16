@@ -39,6 +39,7 @@
 #include "settings.h"
 
 #include "../common/htnet_proto.h"
+#include "../common/htsock.h"
 
 #include "hydro_syms.h"
 
@@ -113,7 +114,7 @@ static const char *addr_str(const struct sockaddr_in *a)
     static int n;
     char *b = buf[n++ & 3];
     char ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &a->sin_addr, ip, sizeof ip);
+    ht_ip4_str(a->sin_addr, ip, sizeof ip);
     snprintf(b, 32, "%s:%u", ip, ntohs(a->sin_port));
     return b;
 }
@@ -150,7 +151,7 @@ static void fanout_add_lan(void)
     for (int i = 0; i < n; i++) {
         struct in_addr in = {.s_addr = bcast[i]};
         char s[INET_ADDRSTRLEN];
-        hy_log("net: LAN broadcast %s", inet_ntop(AF_INET, &in, s, sizeof s));
+        hy_log("net: LAN broadcast %s", ht_ip4_str(in, s, sizeof s));
         fanout_add_units(bcast[i], 1);
     }
 }

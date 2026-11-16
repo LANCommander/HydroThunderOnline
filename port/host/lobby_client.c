@@ -18,6 +18,7 @@
 #include "host.h"
 #include "settings.h"
 
+#include "../common/htsock.h"
 #include "../common/sha256.h"
 #include "../server/lobby.h"
 
@@ -104,7 +105,7 @@ static const char *addr_str(const struct sockaddr_in *a)
     static int n;
     char *b = buf[n++ & 3];
     char ip[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &a->sin_addr, ip, sizeof ip);
+    ht_ip4_str(a->sin_addr, ip, sizeof ip);
     snprintf(b, 32, "%s:%u", ip, ntohs(a->sin_port));
     return b;
 }
@@ -178,7 +179,7 @@ static int resolve(const char *spec, int def_port, struct sockaddr_in *out, char
         ULONGLONG until;
     } cache[4];
     static int next;
-    ULONGLONG now = GetTickCount64();
+    ULONGLONG now = ht_now_ms();
     for (int i = 0; i < 4; i++)
         if (cache[i].until > now && cache[i].def_port == def_port && !strcmp(cache[i].spec, spec)) {
             *out = cache[i].addr;
@@ -204,7 +205,7 @@ static int resolve(const char *spec, int def_port, struct sockaddr_in *out, char
             port = atoi(colon + 1);
         }
         struct in_addr lit;
-        if (inet_pton(AF_INET, p, &lit) == 1) {
+        if (ht_ip4_parse(p, &lit)) {
             make_addr(out, lit.s_addr, port);
             ok = 1;
         } else {
@@ -241,34 +242,50 @@ static int resolve(const char *spec, int def_port, struct sockaddr_in *out, char
     return ok;
 }
 
-int net_lan_broadcasts(uint32_t *out, int max)
+/* An IPv4 address of an adapter that's up (network byte order). */
+typedef struct LocalAddr {
+    uint32_t ip, mask;
+    int gateway; /* the adapter has a default gateway */
+} LocalAddr;
+
+/* GetAdaptersInfo, not GetAdaptersAddresses: on XP that has neither prefix lengths nor gateways. */
+static int local_addrs(LocalAddr *out, int max)
 {
     ULONG size = 16384;
-    IP_ADAPTER_ADDRESSES *list = NULL;
+    IP_ADAPTER_INFO *list = NULL;
     ULONG r = ERROR_BUFFER_OVERFLOW;
     for (int tries = 0; tries < 3 && r == ERROR_BUFFER_OVERFLOW; tries++) {
         free(list);
         list = malloc(size);
         if (!list)
             return 0;
-        r = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
-                                 NULL, list, &size);
+        r = GetAdaptersInfo(list, &size);
     }
     int n = 0;
-    if (r == NO_ERROR) {
-        for (IP_ADAPTER_ADDRESSES *a = list; a; a = a->Next) {
-            if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
-                continue;
-            for (IP_ADAPTER_UNICAST_ADDRESS *u = a->FirstUnicastAddress; u && n < max; u = u->Next) {
-                if (u->Address.lpSockaddr->sa_family != AF_INET || u->OnLinkPrefixLength > 30)
-                    continue;
-                uint32_t ip = ntohl(((struct sockaddr_in *)u->Address.lpSockaddr)->sin_addr.s_addr);
-                uint32_t mask = u->OnLinkPrefixLength ? ~0u << (32 - u->OnLinkPrefixLength) : 0;
-                out[n++] = htonl(ip | ~mask);
-            }
+    for (IP_ADAPTER_INFO *a = r == NO_ERROR ? list : NULL; a; a = a->Next) {
+        MIB_IFROW row = {.dwIndex = a->Index};
+        if (a->Type == MIB_IF_TYPE_LOOPBACK || GetIfEntry(&row) != NO_ERROR ||
+            row.dwOperStatus < MIB_IF_OPER_STATUS_CONNECTED)
+            continue;
+        struct in_addr gw;
+        int gateway = ht_ip4_parse(a->GatewayList.IpAddress.String, &gw) && gw.s_addr;
+        for (IP_ADDR_STRING *s = &a->IpAddressList; s && n < max; s = s->Next) {
+            struct in_addr ip, mask;
+            if (ht_ip4_parse(s->IpAddress.String, &ip) && ip.s_addr && ht_ip4_parse(s->IpMask.String, &mask))
+                out[n++] = (LocalAddr){ip.s_addr, mask.s_addr, gateway};
         }
     }
     free(list);
+    return n;
+}
+
+int net_lan_broadcasts(uint32_t *out, int max)
+{
+    LocalAddr addrs[16];
+    int count = local_addrs(addrs, 16), n = 0;
+    for (int i = 0; i < count && n < max; i++)
+        if (~ntohl(addrs[i].mask) >= 3) /* not a /31 or /32 */
+            out[n++] = addrs[i].ip | ~addrs[i].mask;
     if (!n && max > 0)
         out[n++] = INADDR_BROADCAST;
     return n;
@@ -398,7 +415,7 @@ static void fail(const char *why)
 static void send_request(void)
 {
     send_text(&g.relay, g.text);
-    g.next_send = GetTickCount64() + RETRY_MS;
+    g.next_send = ht_now_ms() + RETRY_MS;
     g.tries++;
 }
 
@@ -527,7 +544,7 @@ static void joined(const char *info)
     g.say_n = 0;
     g.say_seq = 1;
     g.members_seen = 0;
-    g.last_ack = GetTickCount64();
+    g.last_ack = ht_now_ms();
     g.next_keepalive = g.last_ack + HTNET_KEEPALIVE_MS;
     char m[64];
     snprintf(m, sizeof m, "In %s lobby %s as player %d", g.direct ? "DIRECT" : g.lan ? "LAN" : "NET", g.name,
@@ -562,7 +579,7 @@ static void add_entry(int lan, const char *info, const struct sockaddr_in *from)
         memset(e, 0, sizeof *e);
         e->relay = *from;
         snprintf(e->host, sizeof e->host, "%s", lan ? "" : g_master_host);
-        e->ping = (unsigned)(GetTickCount64() - g.browse_t0);
+        e->ping = (unsigned)(ht_now_ms() - g.browse_t0);
     }
     e->lan = lan;
     e->id = id;
@@ -575,7 +592,7 @@ static void add_entry(int lan, const char *info, const struct sockaddr_in *from)
 /* The lobby's last chat id is `id`: fetch what we're missing (at most every RETRY_MS). */
 static void chat_catch_up(uint32_t id)
 {
-    ULONGLONG now = GetTickCount64();
+    ULONGLONG now = ht_now_ms();
     if (id <= g.chat_id || now < g.getchat_next)
         return;
     char text[48];
@@ -711,7 +728,7 @@ static void handle_oob(char *line, const char *info, const struct sockaddr_in *f
              : !strcmp(why, "busy")     ? "The master has no room for lobbies"
                                         : "That lobby is closed");
     } else if (!strcmp(cmd, "keepaliveAck") && argc >= 3 && g.state == LOBBY_IN) {
-        g.last_ack = GetTickCount64();
+        g.last_ack = ht_now_ms();
         if (atoi(argv[2]) != g.ver) {
             char text[32];
             snprintf(text, sizeof text, "getmembers %08x", g.token);
@@ -729,7 +746,7 @@ static void handle_oob(char *line, const char *info, const struct sockaddr_in *f
         g.say_tries = 0;
         g.say_next = 0;
     } else if (!strcmp(cmd, "members") && g.state == LOBBY_IN) {
-        g.last_ack = GetTickCount64();
+        g.last_ack = ht_now_ms();
         g.ver = ht_info_get_int(info, "ver", 0);
         g.owner = ht_info_get_int(info, "owner", -1);
         int start = ht_info_get_int(info, "start", -1);
@@ -786,7 +803,7 @@ void lobby_poll(void)
         }
     }
 
-    ULONGLONG now = GetTickCount64();
+    ULONGLONG now = ht_now_ms();
     if (g.req != REQ_NONE && now >= g.next_send) {
         if (g.tries >= RETRIES)
             fail(g.req == REQ_PROBE ? "No lobby answered at that address"
@@ -871,32 +888,17 @@ int lobby_host_address(char *out, size_t cap)
 {
     if (!g.server || g.state != LOBBY_IN)
         return 0;
-    ULONG size = 16384;
-    IP_ADAPTER_ADDRESSES *list = NULL;
-    ULONG r = ERROR_BUFFER_OVERFLOW;
-    for (int tries = 0; tries < 3 && r == ERROR_BUFFER_OVERFLOW; tries++) {
-        free(list);
-        list = malloc(size);
-        if (!list)
-            return 0;
-        r = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
-                                 NULL, list, &size);
-    }
-    int found = 0;
-    for (IP_ADAPTER_ADDRESSES *a = r == NO_ERROR ? list : NULL; a && !found; a = a->Next) {
-        /* the adapter with a default gateway is the one others reach */
-        if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK || !a->FirstGatewayAddress)
+    LocalAddr addrs[16];
+    int count = local_addrs(addrs, 16);
+    for (int i = 0; i < count; i++) {
+        if (!addrs[i].gateway) /* the adapter with a default gateway is the one others reach */
             continue;
-        for (IP_ADAPTER_UNICAST_ADDRESS *u = a->FirstUnicastAddress; u && !found; u = u->Next)
-            if (u->Address.lpSockaddr->sa_family == AF_INET) {
-                struct sockaddr_in in = *(struct sockaddr_in *)u->Address.lpSockaddr;
-                in.sin_port = htons((u_short)lobby_server_port(g.server));
-                snprintf(out, cap, "%s", addr_str(&in));
-                found = 1;
-            }
+        struct sockaddr_in in = {.sin_family = AF_INET, .sin_addr.s_addr = addrs[i].ip};
+        in.sin_port = htons((u_short)lobby_server_port(g.server));
+        snprintf(out, cap, "%s", addr_str(&in));
+        return 1;
     }
-    free(list);
-    return found;
+    return 0;
 }
 
 int lobby_chat(const LobbyChatLine **out)
@@ -970,7 +972,7 @@ void lobby_browse(int clear)
         g.count = 0;
         snprintf(g.challenge, sizeof g.challenge, "%08x", ht_random32());
     }
-    g.browse_t0 = GetTickCount64();
+    g.browse_t0 = ht_now_ms();
     char text[40];
     snprintf(text, sizeof text, "getinfo %s", g.challenge);
     uint32_t bcast[16];
@@ -1084,7 +1086,7 @@ void lobby_autostart(void)
     const char *env = getenv("HYDRO_LOBBY");
     if (!env || !*env)
         return;
-    ULONGLONG end = GetTickCount64() + 10000;
+    ULONGLONG end = ht_now_ms() + 10000;
     if (!_strnicmp(env, "direct:", 7)) {
         lobby_connect(env + 7);
         goto wait;
@@ -1108,10 +1110,10 @@ void lobby_autostart(void)
     } else {
         const LobbyEntry *found = NULL;
         ULONGLONG next = 0;
-        while (!found && GetTickCount64() < end) {
-            if (GetTickCount64() >= next) {
+        while (!found && ht_now_ms() < end) {
+            if (ht_now_ms() >= next) {
                 lobby_browse(1);
-                next = GetTickCount64() + 1000;
+                next = ht_now_ms() + 1000;
             }
             Sleep(20);
             lobby_poll();
@@ -1129,14 +1131,14 @@ void lobby_autostart(void)
         lobby_join(&e, f[3] ? f[3] : "");
     }
 wait:
-    while (lobby_state() == LOBBY_BUSY && GetTickCount64() < end) {
+    while (lobby_state() == LOBBY_BUSY && ht_now_ms() < end) {
         Sleep(20);
         lobby_poll();
     }
     hy_log("lobby: HYDRO_LOBBY: %s", lobby_message());
     const char *say = getenv("HYDRO_LOBBY_SAY");
     if (say && *say && lobby_say(say)) {
-        for (end = GetTickCount64() + 2000; GetTickCount64() < end && g.say_n;) {
+        for (end = ht_now_ms() + 2000; ht_now_ms() < end && g.say_n;) {
             lobby_poll();
             Sleep(20);
         }
