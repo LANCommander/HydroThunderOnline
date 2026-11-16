@@ -16,6 +16,7 @@
 #include "disk_setup.h"
 #include "hook.h"
 #include "host.h"
+#include "lc_stats.h"
 #include "lobby_client.h"
 #include "settings.h"
 #include "symtab.h"
@@ -175,6 +176,7 @@ int main(int argc, char **argv)
     settings_apply_graphics();
     lobby_client_init();
     lobby_autostart();
+    lc_stats_init();
 
     veh_install();
     window_create(1024, 768);

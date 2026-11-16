@@ -8,6 +8,7 @@
  */
 #include "hook.h"
 #include "host.h"
+#include "lc_stats.h"
 
 #include <windows.h>
 #include <stdio.h>
@@ -147,6 +148,7 @@ static BOOL WINAPI my_SetSystemTime(const SYSTEMTIME *st)
 static void WINAPI my_ExitProcess(UINT code)
 {
     hy_log("ExitProcess(%u)", code);
+    lc_stats_shutdown();
     ExitProcess(code);
 }
 

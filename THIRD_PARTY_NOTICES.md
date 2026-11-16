@@ -26,6 +26,17 @@ Glide wrapper and configuration API by Dege. <https://github.com/dege-diosg/dgVo
 next to `hydro.exe`, as dgVoodoo's author permits for applications. dgVoodoo is freeware and is not covered by this
 project's license.
 
+## LANCommander Interposer (source, `vendor/LANCommander.Interposer` submodule)
+
+Reports races to LANCommander. Its embeddable library, with only match statistics, is statically linked into
+`hydro_lancommander.dll`. <https://github.com/LANCommander/LANCommander.Interposer>, MIT, Copyright (c) 2024-2026
+LANCommander Contributors. Linked into the same DLL, with their full license texts in their submodules or folders:
+
+- yaml-cpp (`vendor/yaml-cpp` submodule): MIT, Copyright (c) 2008-2015 Jesse Beder.
+- MinHook (`vendor/minhook` submodule): BSD 2-Clause, Copyright (C) 2009-2017 Tsuda Kageyu (Hacker Disassembler
+  Engine: Copyright (c) 2008-2009 Vyacheslav Patkov).
+- YY-Thunks (fetched at build time by the Interposer's `build/Get-YYThunks.ps1`): MIT, Copyright (c) 2018 Chuyu-Team.
+
 ## Hydro Thunder
 
 Hydro Thunder is © 1999 Midway Games; the trademark and game belong to their respective owners. This project is not

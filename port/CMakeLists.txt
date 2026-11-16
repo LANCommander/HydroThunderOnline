@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25) # 3.25: the LANCommander Interposer (embedded, WHOLE_ARCHIVE)
 project(HydroThunder VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
@@ -168,3 +168,70 @@ if(HYDRO_FETCH_DGVOODOO)
 endif()
 
 install(TARGETS hydro RUNTIME DESTINATION .)
+
+# LANCommander match statistics: races are reported to LANCommander through the LANCommander Interposer, embedded
+# with only its MATCHES feature (every feature of the embeddable library is opt-in; the port needs no file, registry,
+# network or input hooks). It brings its config (.interposer\Config.yml next to hydro.exe), its session log and the
+# launcher's event channel, which is how races reach LANCommander when its launcher started the game.
+#
+# It's embedded in hydro_lancommander.dll, not in hydro.exe: the linker puts every code section before .hyimg, and
+# the Interposer's ~400 KB of code would push .hyimg past 0x100000. hydro.exe delay-loads the DLL (host/lc_stats.c),
+# so the game runs on without it. The DLL is built for XP the way the Interposer's own DLL is, with YY-Thunks.
+option(HYDRO_LANCOMMANDER "Report races to LANCommander (hydro_lancommander.dll, the LANCommander Interposer)" ON)
+if(HYDRO_LANCOMMANDER)
+    set(LC_DIR ${REPO_ROOT}/vendor/LANCommander.Interposer)
+    if(NOT EXISTS ${LC_DIR}/CMakeLists.txt)
+        message(FATAL_ERROR "${LC_DIR} is empty. Run: git submodule update --init --recursive")
+    endif()
+
+    # The Interposer finds yaml-cpp and MinHook with find_package (vcpkg, in its own builds). Here they're submodules
+    # built in-tree, and OVERRIDE_FIND_PACKAGE makes those find_package calls resolve to them.
+    include(FetchContent)
+    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_FORMAT_SOURCE OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(yaml-cpp SOURCE_DIR ${REPO_ROOT}/vendor/yaml-cpp OVERRIDE_FIND_PACKAGE EXCLUDE_FROM_ALL)
+    FetchContent_Declare(minhook SOURCE_DIR ${REPO_ROOT}/vendor/minhook OVERRIDE_FIND_PACKAGE EXCLUDE_FROM_ALL)
+    FetchContent_MakeAvailable(yaml-cpp minhook)
+    add_library(minhook::minhook ALIAS minhook)
+
+    # YY-Thunks: what lets the v143 CRT and STL in the DLL load on XP (the Interposer's CMake also requires it to
+    # configure). The Interposer's script fetches the release it pins, checked against its SHA-256, into the
+    # submodule's build\YY-Thunks\ (which that repository ignores); the version is read from it as its CMake does.
+    file(READ ${LC_DIR}/build/Get-YYThunks.ps1 LC_YY_SCRIPT)
+    if(NOT LC_YY_SCRIPT MATCHES "\\$Version = '([0-9.]+)'")
+        message(FATAL_ERROR "Could not read the YY-Thunks version from ${LC_DIR}/build/Get-YYThunks.ps1")
+    endif()
+    set(LC_YYTHUNKS_OBJ ${LC_DIR}/build/YY-Thunks/${CMAKE_MATCH_1}/objs/x86/YY_Thunks_for_WinXP.obj)
+    if(NOT EXISTS ${LC_YYTHUNKS_OBJ})
+        execute_process(COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File ${LC_DIR}/build/Get-YYThunks.ps1
+            RESULT_VARIABLE LC_YY_RESULT)
+        if(NOT LC_YY_RESULT EQUAL 0 OR NOT EXISTS ${LC_YYTHUNKS_OBJ})
+            message(FATAL_ERROR "Fetching YY-Thunks for the LANCommander Interposer failed")
+        endif()
+    endif()
+
+    # Only the embeddable library (no Interposer DLL, injector, tests or plugins), carrying only match statistics.
+    set(INTERPOSER_EMBEDDED_ONLY ON CACHE BOOL "" FORCE)
+    set(INTERPOSER_FEATURE_MATCHES ON CACHE BOOL "" FORCE)
+    add_subdirectory(${LC_DIR} ${CMAKE_CURRENT_BINARY_DIR}/interposer EXCLUDE_FROM_ALL)
+
+    # The DLL exports every Interposer* function (the whole archive is linked) plus HydroLancommanderAttach.
+    add_library(hydro_lancommander SHARED lancommander/hydro_lancommander.c ${LC_YYTHUNKS_OBJ})
+    target_link_libraries(hydro_lancommander PRIVATE LANCommander::Interposer::Embedded)
+    # As build/Compatibility.cmake (interposer_ship_target) sets up the Interposer's DLL for XP: Windows 5.01 in the
+    # PE header, and YY-Thunks' entry point, which chains to the CRT's and gives thread_local working TLS on XP.
+    target_link_options(hydro_lancommander PRIVATE /SUBSYSTEM:WINDOWS,5.01 /ENTRY:DllMainCRTStartupForYY_Thunks
+        /alternatename:_YY_ThunksOriginalDllMainCRTStartup@12=__DllMainCRTStartup@12)
+    install(TARGETS hydro_lancommander RUNTIME DESTINATION .)
+
+    # hydro.exe calls the Interposer API through the DLL's import library, delay-loaded so that a missing DLL only
+    # turns reporting off. Without INTERPOSER_STATIC, the header declares the functions dllimport, as for the
+    # Interposer's own DLL.
+    target_sources(hydro PRIVATE host/lc_stats.c)
+    target_compile_definitions(hydro PRIVATE HYDRO_LANCOMMANDER)
+    target_include_directories(hydro PRIVATE ${LC_DIR}/LANCommander.Interposer/include)
+    target_link_libraries(hydro PRIVATE hydro_lancommander delayimp)
+    target_link_options(hydro PRIVATE /DELAYLOAD:hydro_lancommander.dll)
+endif()

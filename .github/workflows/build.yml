@@ -25,6 +25,7 @@ jobs:
         run: >
           cmake -S port -B build -A Win32 -DHYDRO_CPP_CORE_CHECK=ON
           "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=/INCREMENTAL:NO /DEBUG:NONE /OPT:REF /OPT:ICF"
+          "-DCMAKE_SHARED_LINKER_FLAGS_RELEASE=/INCREMENTAL:NO /DEBUG:NONE /OPT:REF /OPT:ICF"
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -36,17 +37,18 @@ jobs:
           Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.md dist
 
       # hydro.exe must still reserve 0x100000-0x7a3000 for the original image (host code must stay small enough)
-      # and carry no debug directory. Both executables must load on Windows XP and need no runtime DLLs.
+      # and carry no debug directory. The executables and hydro_lancommander.dll must load on Windows XP and need
+      # no runtime DLLs.
       - name: Check executables
         shell: pwsh
         run: |
           python -m pip install --quiet pefile
-          python port/tools/check_imports.py dist/hydro.exe dist/htmaster.exe
+          python port/tools/check_imports.py dist/hydro.exe dist/hydro_lancommander.dll dist/htmaster.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }
           python -c @'
           import sys, pefile
           bad = 0
-          for f in ("dist/hydro.exe", "dist/htmaster.exe"):
+          for f in ("dist/hydro.exe", "dist/hydro_lancommander.dll", "dist/htmaster.exe"):
               pe = pefile.PE(f, fast_load=True)
               pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DEBUG"]])
               for d in getattr(pe, "DIRECTORY_ENTRY_DEBUG", []):

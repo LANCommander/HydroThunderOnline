@@ -1,12 +1,13 @@
 """Checks that executables load on Windows XP SP3 and need no runtime DLLs (CI; see port/CMakeLists.txt).
 
-    python check_imports.py hydro.exe htmaster.exe
+    python check_imports.py hydro.exe hydro_lancommander.dll htmaster.exe
 
-For each executable:
+For each executable (or DLL):
 - the PE header's OS and subsystem versions are at most 5.1 (XP);
 - it imports only from system DLLs that XP has (so not the VC++ or universal CRT DLLs: the CRT is static);
 - it imports none of the functions below, which those DLLs only gained after XP. The list covers what the CRT,
-  SDL and code like the host's are likely to reach for; port/common/winxp_crt.c stands in for the CRT's.
+  SDL and code like the host's are likely to reach for; port/common/winxp_crt.c stands in for the CRT's, and
+  YY-Thunks for those of hydro_lancommander.dll (the LANCommander Interposer's C++ runtime).
 Requires pefile (pip install pefile).
 """
 import sys
@@ -17,7 +18,13 @@ XP_DLLS = {
     "advapi32.dll", "comdlg32.dll", "dnsapi.dll", "gdi32.dll", "imm32.dll", "iphlpapi.dll", "kernel32.dll",
     "ole32.dll", "oleaut32.dll", "setupapi.dll", "shell32.dll", "user32.dll", "version.dll", "winmm.dll",
     "ws2_32.dll",
+    # WinHTTP 5.1, in XP since SP1: hydro_lancommander.dll (the LANCommander Interposer) sends match reports with it.
+    "winhttp.dll",
 }
+
+# The port's own DLLs, checked on their own. Allowed only as delay-loaded imports, so that hydro.exe still starts
+# without them.
+PORT_DLLS = {"hydro_lancommander.dll"}
 
 # Functions of the DLLs above that are Vista or later.
 NOT_ON_XP = {
@@ -108,9 +115,11 @@ def check(path):
     ):
         if (major, minor) > (5, 1):
             problems.append(f"{what} version {major}.{minor} (XP is 5.1)")
-    entries = getattr(pe, "DIRECTORY_ENTRY_IMPORT", []) + getattr(pe, "DIRECTORY_ENTRY_DELAY_IMPORT", [])
-    for entry in entries:
+    delayed = getattr(pe, "DIRECTORY_ENTRY_DELAY_IMPORT", [])
+    for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", []) + delayed:
         dll = entry.dll.decode().lower()
+        if dll in PORT_DLLS and entry in delayed:
+            continue
         if dll not in XP_DLLS:
             problems.append(f"imports {dll}")
             continue

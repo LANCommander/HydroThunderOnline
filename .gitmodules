@@ -7,3 +7,12 @@
 [submodule "vendor/SDL"]
 	path = vendor/SDL
 	url = https://github.com/libsdl-org/SDL.git
+[submodule "vendor/LANCommander.Interposer"]
+	path = vendor/LANCommander.Interposer
+	url = https://github.com/LANCommander/LANCommander.Interposer.git
+[submodule "vendor/yaml-cpp"]
+	path = vendor/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git
+[submodule "vendor/minhook"]
+	path = vendor/minhook
+	url = https://github.com/TsudaKageyu/minhook.git

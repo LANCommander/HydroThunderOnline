@@ -11,6 +11,7 @@ No game files are included. You need the arcade's hard disk image, `hydro.chd`, 
 - Keyboard and gamepads (Xbox, PlayStation, Switch and other controllers, through SDL), with rebindable controls.
 - Reworked operator menu to provide an authentic-feeling settings menu
 - Host or join a network lobby either on your local network or over the internet via HTO's master server. Race with up to 16 players in a single lobby!
+- Races are reported to [LANCommander](https://lancommander.app) for its match history and leaderboards (see below).
 
 ## Requirements
 
@@ -71,6 +72,32 @@ All network communication is done over UDP.
 
 When given a DNS name, the client will also check SRV records with `_hydrothunder._udp` for port discovery.
 
+### LANCommander match statistics
+
+Every race is reported to LANCommander as a match: the track, every boat (humans and AI), each finish, and the
+final standings with finishing times. This goes through the [LANCommander Interposer](https://github.com/LANCommander/LANCommander.Interposer),
+embedded with only its match statistics feature in `hydro_lancommander.dll`, next to `hydro.exe`. Without that DLL
+the game runs as usual and reports nothing.
+
+- **Started from LANCommander's launcher:** nothing to set up. The launcher sends the races as the signed-in player.
+- **Otherwise** a `.interposer\Config.yml` next to `hydro.exe` can send them straight to a LANCommander server,
+  with a personal access token that has the `matches:report` scope:
+
+  ```yaml
+  MatchStatistics:
+    ServerUrl: 'http://lancommander.lan:1337'
+    Token: '%LANCOMMANDER_MATCH_TOKEN%'
+    GameId: '<the game''s id in LANCommander>'
+  Logging:
+    Matches: true   # [MATCH ...] lines in .interposer\Logs\
+  ```
+
+LANCommander links a player to their account by name, so set **PLAYER NAME** (PC SETTINGS > NETWORK) to your
+LANCommander alias. In a lobby players are named by the lobby; on a direct link (no lobby) the other units' names
+aren't known, so players are `unit:<n>`. A linked race is reported by its host only: the lobby's host, or the
+race's lowest unit when the host isn't racing or there's no lobby. `-DHYDRO_LANCOMMANDER=OFF` builds without any
+of this.
+
 ## Building
 
 You need Visual Studio 2022 or later with the C++ desktop workload, and CMake 3.20 or later.
@@ -108,7 +135,8 @@ Environment variables for development: `HYDRO_TRACE=func1,func2` logs calls to o
 | `port/generated`, `port/include` | symbol tables generated from the arcade executable's debug symbols |
 | `assets` | the application icon and the port's own player markers 9-16 (PNGs, and their source `markers.psd`) |
 | `docs` | the network protocol and the port's changes to it |
-| `vendor` | submodules: libchdr, SDL 2 and the dgVoodoo 2 API |
+| `port/lancommander` | `hydro_lancommander.dll`: the embedded LANCommander Interposer (races are reported from `port/host/lc_stats.c`) |
+| `vendor` | submodules: libchdr, SDL 2, the dgVoodoo 2 API, and the LANCommander Interposer with yaml-cpp and MinHook |
 
 ## License
 

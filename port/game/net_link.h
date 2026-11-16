@@ -61,5 +61,8 @@ typedef struct SeedData {
 #define Net_Link_SeedHeader (*(SeedHeader *)HY_VAR_Net_Link_SeedData)
 extern SeedData g_net_seed;
 
+/* Units in the current race group (1 when racing alone). */
+uint32_t net_link_GetCurrentGroupSize(void);
+
 /* Player_anHumanList, moved out of the image (it had room for 4, and Player_anRank follows it). */
 extern uint32_t g_player_human_list[16];

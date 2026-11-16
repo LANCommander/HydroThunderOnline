@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "../host/host.h"
+#include "../host/lc_stats.h"
 
 typedef void(__cdecl *VoidFn)(void);
 
@@ -851,6 +852,9 @@ static void sync_check(void)
 
 void net_link_PostWorkSend(void)
 {
+    /* Not the link's: the game loop calls this after every frame's sim, in every mode, which is when the
+     * LANCommander race reporting looks at the race (host/lc_stats.c). */
+    lc_stats_frame();
     nl.work_iters = nl.iters_in;
     if (Statemgr_nState != ST_RACE)
         return;

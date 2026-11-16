@@ -2,6 +2,7 @@
 #include "hle_hw.h"
 #include "host.h"
 #include "input.h"
+#include "lc_stats.h"
 
 #include <stdio.h>
 
@@ -58,6 +59,7 @@ void window_create(int width, int height)
 void window_quit(void)
 {
     hw_cmos_flush_volume();
+    lc_stats_shutdown();
     ExitProcess(0);
 }
 
